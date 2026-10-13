@@ -1,0 +1,10 @@
+# opencode commands banlist — one pattern per line, "#" = comment
+# Managed by the commands-banlist.js plugin.
+#
+#   plain line   -> substring match against the command (whitespace-insensitive)
+#   /regex/flags -> regular expression match
+#
+# Every command is checked as a whole, per `; | && ||` segment and inside
+# quoted payloads (recursively), so `ssh -c "pgrep x"` is caught as well.
+
+pgrep

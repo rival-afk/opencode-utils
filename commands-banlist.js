@@ -1,4 +1,4 @@
-// commands-banlist.js — opencode plugin
+// commands-banlist.js — opencode plugin (V2)
 //
 // Reads a banlist file and refuses to execute matching shell commands.
 //   default file: ~/.config/opencode/banlist
@@ -14,19 +14,28 @@
 // A blocked call fails with the message below as the *tool response*, so the
 // model immediately sees why the command was rejected (no silent log entries).
 //
-// Options: { enabled: true|false, path: "/custom/banlist" }
+// Options (object form in opencode.json: { package: "./commands-banlist.js", options: {...} }):
+//   enabled: true|false, path: "/custom/banlist"
+//
+// OpenCode V2 plugin API: default export { id, setup(ctx) }. The V1 hooks
+// (tool.execute.before with separate input/output) become ctx.tool.hook.
 
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-const DEFAULT_PATH = path.join(os.homedir(), ".config", "opencode", "banlist")
+export const id = "opencode.utils.commands-banlist"
 
-function normalize(s) {
+export const DEFAULT_PATH = path.join(os.homedir(), ".config", "opencode", "banlist")
+
+// V2 renamed the shell tool; `bash`/`sh` are kept for compatibility.
+const SHELL_TOOLS = new Set(["shell", "bash", "sh"])
+
+export function normalize(s) {
   return s.trim().replace(/\s+/g, " ")
 }
 
-function parseLine(line) {
+export function parseLine(line) {
   const raw = line.trim()
   if (!raw || raw.startsWith("#")) return null
   const m = /^\/(.+)\/([gimsuy]*)$/.exec(raw)
@@ -40,7 +49,7 @@ function parseLine(line) {
   return { kind: "sub", text: normalize(raw), raw }
 }
 
-function loadFile(file) {
+export function loadFile(file) {
   try {
     const lines = fs.readFileSync(file, "utf8").split(/\r?\n/)
     return lines.map(parseLine).filter(Boolean)
@@ -49,7 +58,7 @@ function loadFile(file) {
   }
 }
 
-function makeStore(file) {
+export function makeStore(file) {
   let patterns = []
   let stamp = null
   let loaded = false
@@ -80,7 +89,7 @@ function makeStore(file) {
 
 // ---- command decomposition -------------------------------------------------
 
-function splitTop(cmd) {
+export function splitTop(cmd) {
   const parts = []
   let cur = ""
   let quote = null
@@ -122,7 +131,7 @@ function splitTop(cmd) {
   return parts
 }
 
-function extractQuoted(text) {
+export function extractQuoted(text) {
   const out = []
   const re = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g
   let m
@@ -144,7 +153,7 @@ function collect(text, depth, out) {
   }
 }
 
-function matchBanlist(cmd, patterns) {
+export function matchBanlist(cmd, patterns) {
   const candidates = []
   collect(String(cmd ?? ""), 0, candidates)
   // prefer the most specific (shortest) matching candidate for the error message
@@ -164,28 +173,27 @@ function matchBanlist(cmd, patterns) {
 
 // ---- plugin ----------------------------------------------------------------
 
-export default async function commandsBanlist(input, options) {
-  const opts = options ?? {}
+export async function setup(ctx) {
+  const opts = ctx.options ?? {}
   const enabled = opts.enabled !== false
   const file = opts.path ? path.resolve(String(opts.path).replace(/^~(?=\/|$)/, os.homedir())) : DEFAULT_PATH
   const store = makeStore(file)
 
-  return {
-    "tool.execute.before": async (hookInput, output) => {
-      if (!enabled) return
-      const tool = hookInput.tool
-      if (tool !== "shell" && tool !== "bash" && tool !== "sh") return
-      const cmd = output.args?.command
-      if (typeof cmd !== "string" || !cmd.trim()) return
+  await ctx.tool.hook("execute.before", (event) => {
+    if (!enabled) return
+    if (!SHELL_TOOLS.has(event.tool)) return
+    const cmd = event.input?.command
+    if (typeof cmd !== "string" || !cmd.trim()) return
 
-      const hit = matchBanlist(cmd, store.patterns)
-      if (hit) {
-        throw new Error(
-          `command is blacklisted: matched "${hit.pattern.raw}" in ${store.file} ` +
-            `-> ${JSON.stringify(hit.cand)} ` +
-            `(blocked command: ${JSON.stringify(cmd.length > 300 ? cmd.slice(0, 300) + "…" : cmd)})`,
-        )
-      }
-    },
-  }
+    const hit = matchBanlist(cmd, store.patterns)
+    if (hit) {
+      throw new Error(
+        `command is blacklisted: matched "${hit.pattern.raw}" in ${store.file} ` +
+          `-> ${JSON.stringify(hit.cand)} ` +
+          `(blocked command: ${JSON.stringify(cmd.length > 300 ? cmd.slice(0, 300) + "…" : cmd)})`,
+      )
+    }
+  })
 }
+
+export default { id, setup }

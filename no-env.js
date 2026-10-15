@@ -1,4 +1,4 @@
-// no-env.js — opencode plugin
+// no-env.js — opencode plugin (V2)
 //
 // .env files stay writable and usable through $VAR insertion, but their
 // contents never reach the model:
@@ -9,18 +9,24 @@
 //   - $VAR / ${VAR} insertion is allowed (it never reads the file)
 //   - values found in .env* are redacted from every tool output afterwards
 //
-// Options (tuple form in opencode.json: ["./no-env.js", {...}]):
+// Options (object form in opencode.json: { package: "./no-env.js", options: {...} }):
 //   enabled:  true | false          (default true)
 //   redact:   "sensitive" | "all" | false   (default "sensitive")
+//   rescanInterval: ms to re-read .env* from disk for redaction (default 1000)
+//
+// OpenCode V2 plugin API: default export { id, setup(ctx) }. Registrations are
+// made through ctx.tool.hook / ctx.event.subscribe instead of a returned map.
 
 import fs from "node:fs"
 import path from "node:path"
 
-const DEFAULTS = { enabled: true, redact: "sensitive" }
+export const id = "opencode.utils.no-env"
+
+const DEFAULTS = { enabled: true, redact: "sensitive", rescanInterval: 1000 }
 
 const SAFE_SUFFIX = /\.(example|sample|template|dist|default|defaults|placeholder)$/i
 
-function isEnvFile(p) {
+export function isEnvFile(p) {
   if (typeof p !== "string" || p.length === 0) return false
   const base = path.basename(p.trim())
   if (!/^\.env(\.[^.\/\\]+)*$/.test(base)) return false
@@ -31,15 +37,15 @@ function isEnvFile(p) {
 // .env, .env.local, config/.env.production ... (not foo.env, not .envrc)
 const ENV_REF_RE = /(?:^|[^A-Za-z0-9_.])(\.env(?:\.[A-Za-z0-9_-]+)*)(?=$|[^A-Za-z0-9_.-])/g
 
-function refsIn(text) {
+export function refsIn(text) {
   const out = []
-  for (const m of text.matchAll(ENV_REF_RE)) {
+  for (const m of String(text).matchAll(ENV_REF_RE)) {
     if (isEnvFile(m[1])) out.push(m[1])
   }
   return out
 }
 
-function splitTop(cmd) {
+export function splitTop(cmd) {
   const parts = []
   let cur = ""
   let quote = null
@@ -60,7 +66,7 @@ function splitTop(cmd) {
       cur += ch
       continue
     }
-    if (ch === "\\" ) {
+    if (ch === "\\") {
       cur += ch
       esc = true
       continue
@@ -81,7 +87,7 @@ function splitTop(cmd) {
   return parts
 }
 
-function extractQuoted(text) {
+export function extractQuoted(text) {
   const out = []
   const re = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g
   let m
@@ -117,6 +123,21 @@ const SCRIPT_WRITE_RE =
 
 const LEAD_SKIP = new Set(["sudo", "command", "builtin", "nohup", "time", "exec", "nice", "doas"])
 
+// Read primitives used inside script payloads: open('.env').read(),
+// fs.readFileSync('.env'), Get-Content .env, file_get_contents('.env'), ...
+const SCRIPT_READ_RE =
+  /\b(open|readFile|readFileSync|readFileText|read_text|read_bytes|readlines|readline|readAll|getContent|Get-Content|fopen|fgets|file_get_contents)\b/i
+
+// A quoted payload is a reader only if it actually looks like one. A plain
+// message that merely mentions ".env" (a commit message, an echo, an issue
+// title) must not be blocked. Nested quoted commands are still caught because
+// collect() descends into the payload and re-checks every extracted part.
+function payloadReads(text, refs) {
+  if (readsEnv(text, refs)) return true
+  if (SCRIPT_READ_RE.test(text)) return true
+  return false
+}
+
 function firstWords(seg, n) {
   const words = seg.trim().split(/\s+/).filter(Boolean)
   const out = []
@@ -132,7 +153,10 @@ function firstWords(seg, n) {
       while (i < words.length && /^[A-Za-z_]\w*=/.test(words[i])) i++
       continue
     }
-    out.push(w)
+    // strip wrapping quotes / backslashes so escaped forms like \"cat are seen
+    // as the command they are (bash -c "sh -c \"cat .env\"")
+    const clean = w.replace(/^[\\'"`]+|[\\'"`]+$/g, "")
+    if (clean) out.push(clean)
     i++
   }
   return out
@@ -176,7 +200,7 @@ function readsEnv(text, refs) {
   return false
 }
 
-function analyseCommand(cmd) {
+export function analyseCommand(cmd) {
   const candidates = []
   collect(String(cmd ?? ""), "cmd", 0, candidates)
   for (const cand of candidates) {
@@ -188,6 +212,8 @@ function analyseCommand(cmd) {
       // payload that is just a filename ("cat .env", "echo .env") — the surrounding
       // command was already checked at cmd level; a bare filename itself reads nothing
       if (refs.length === 1 && refs[0] === bare) continue
+      // only block payloads that actually read the file, not prose that mentions it
+      if (!payloadReads(cand.text, refs)) continue
       return { ref: refs[0], snippet: cand.text }
     }
     if (readsEnv(cand.text, refs)) {
@@ -214,7 +240,7 @@ const SKIP_DIRS = new Set([
   "vendor", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".idea",
 ])
 
-function parseEnv(content) {
+export function parseEnv(content) {
   const found = []
   for (const raw of content.split(/\r?\n/)) {
     const line = raw.trim()
@@ -257,7 +283,7 @@ function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-function makeSecretStore(opts) {
+export function makeSecretStore(opts) {
   const values = new Map() // name -> Set(values) (cumulative, survives file renames)
 
   function scanRoot(root, depth) {
@@ -301,14 +327,44 @@ function makeSecretStore(opts) {
     return out
   }
 
-  return { scan, redact }
+  return { scan, redact, size: () => values.size }
+}
+
+// ---- tool result redaction -------------------------------------------------
+
+function redactDeep(value, store, depth = 0) {
+  if (depth > 4 || value === null || typeof value !== "object") return
+  if (Array.isArray(value)) {
+    for (const item of value) redactDeep(item, store, depth + 1)
+    return
+  }
+  for (const key of Object.keys(value)) {
+    const v = value[key]
+    if (typeof v === "string") value[key] = store.redact(v)
+    else redactDeep(v, store, depth + 1)
+  }
+}
+
+export function redactResult(result, store) {
+  if (!result || typeof result !== "object") return
+  // V2 Tool.Result: { output?, content?: string | Content[], metadata? }
+  if (typeof result.content === "string") {
+    result.content = store.redact(result.content)
+  } else if (Array.isArray(result.content)) {
+    for (const part of result.content) {
+      if (part && part.type === "text" && typeof part.text === "string") part.text = store.redact(part.text)
+    }
+  }
+  if (typeof result.output === "string") result.output = store.redact(result.output)
+  redactDeep(result.metadata, store)
 }
 
 // ---- plugin ----------------------------------------------------------------
 
-export default async function noEnv(input, options) {
-  const opts = { ...DEFAULTS, ...(options ?? {}) }
-  const dirs = [input.directory, input.worktree].filter(Boolean)
+export async function setup(ctx) {
+  const opts = { ...DEFAULTS, ...(ctx.options ?? {}) }
+  const location = ctx.location ?? {}
+  const dirs = [location.directory, location.project?.directory, location.worktree].filter(Boolean)
   const store = makeSecretStore(opts)
 
   if (opts.enabled) {
@@ -320,9 +376,10 @@ export default async function noEnv(input, options) {
   }
 
   let lastScan = 0
+  const rescanInterval = Number.isFinite(Number(opts.rescanInterval)) ? Math.max(0, Number(opts.rescanInterval)) : DEFAULTS.rescanInterval
   const rescan = () => {
     const now = Date.now()
-    if (now - lastScan < 1000) return
+    if (now - lastScan < rescanInterval) return
     lastScan = now
     try {
       store.scan(dirs, 2)
@@ -331,49 +388,65 @@ export default async function noEnv(input, options) {
     }
   }
 
-  return {
-    event: async ({ event }) => {
-      if (!opts.enabled) return
-      if (event?.type !== "file.edited") return
-      const s = JSON.stringify(event.properties ?? {})
-      if (/\.env(\.[A-Za-z0-9_-]+)?["'\\]/.test(s) || isEnvFile(s)) rescan()
-    },
-
-    "tool.execute.before": async (input2, output) => {
-      if (!opts.enabled) return
-      const tool = input2.tool
-      const args = output.args ?? {}
-
-      if (tool === "read") {
-        if (isEnvFile(args.path)) throw envRestricted(path.basename(String(args.path)), "read tool")
-        return
-      }
-
-      if (tool === "grep") {
-        const target =
-          (typeof args.path === "string" && isEnvFile(args.path)) ||
-          (typeof args.include === "string" && refsIn(args.include).length > 0)
-        if (target) throw envRestricted(String(args.path ?? args.include), "grep tool")
-        return
-      }
-
-      if (tool === "shell" || tool === "bash" || tool === "sh") {
-        const hit = analyseCommand(args.command)
-        if (hit) throw envRestricted(hit.ref, JSON.stringify(hit.snippet).slice(0, 120))
-        return
-      }
-
-      // write / edit / patch / glob and everything else stay allowed
-    },
-
-    "tool.execute.after": async (input2, output) => {
-      if (!opts.enabled || opts.redact === false) return
+  // Re-scan when an .env file is edited (V2 event: { type, data: { file } }).
+  const controller = new AbortController()
+  if (ctx.event?.subscribe) {
+    void (async () => {
       try {
-        if (typeof output.output === "string") output.output = store.redact(output.output)
-        if (typeof output.title === "string") output.title = store.redact(output.title)
+        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+          if (!opts.enabled) continue
+          if (event?.type !== "file.edited") continue
+          const file = String(event.data?.file ?? "")
+          if (isEnvFile(file) || /(^|[\\/])\.env(\.[A-Za-z0-9_-]+)?$/.test(file)) rescan()
+        }
       } catch {
-        /* never break the tool result */
+        /* subscription closed */
       }
-    },
+    })()
   }
+
+  await ctx.tool.hook("execute.before", (event) => {
+    if (!opts.enabled) return
+    const tool = event.tool
+    const args = event.input ?? {}
+
+    if (tool === "read") {
+      if (isEnvFile(args.path)) throw envRestricted(path.basename(String(args.path)), "read tool")
+      return
+    }
+
+    if (tool === "grep") {
+      const target =
+        (typeof args.path === "string" && isEnvFile(args.path)) ||
+        (typeof args.include === "string" && refsIn(args.include).length > 0)
+      if (target) throw envRestricted(String(args.path ?? args.include), "grep tool")
+      return
+    }
+
+    if (tool === "shell" || tool === "bash" || tool === "sh") {
+      const hit = analyseCommand(args.command)
+      if (hit) throw envRestricted(hit.ref, JSON.stringify(hit.snippet).slice(0, 120))
+      return
+    }
+
+    // write / edit / patch / glob and everything else stay allowed
+  })
+
+  await ctx.tool.hook("execute.after", (event) => {
+    if (!opts.enabled || opts.redact === false) return
+    if (event.status !== "completed") return
+    // Re-read .env from disk (throttled) so values added after startup are
+    // caught even when file.edited events are unavailable. This also covers
+    // the .env write performed by the very tool call being redacted.
+    rescan()
+    try {
+      redactResult(event.result, store)
+    } catch {
+      /* never break the tool result */
+    }
+  })
+
+  return () => controller.abort()
 }
+
+export default { id, setup }

@@ -18,6 +18,41 @@ quietly written to opencode's logs only.
 
 ## Install
 
+### One-liner (asks which plugins to install, downloads them from GitHub)
+
+**Unix / Linux / Termux / macOS** — `curl | sh`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rival-afk/opencode-utils/main/install.sh | sh
+```
+
+**Windows (cmd.exe)** — download & run:
+
+```cmd
+curl -fsSL https://raw.githubusercontent.com/rival-afk/opencode-utils/main/install.cmd -o "%TEMP%\opencode-utils-install.cmd" && "%TEMP%\opencode-utils-install.cmd"
+```
+
+Both installers:
+
+- ask interactively which plugins to install (numbers/names, `all` = everything),
+- fall back to `all` when there is no console (piped stdin) or when `OPENCODE_UTILS_PLUGINS` is set,
+- download the selected `.js` files from `raw.githubusercontent.com` into
+  `~/.config/opencode/plugins` (`%USERPROFILE%\.config\opencode\plugins` on Windows),
+- sanity-check each file (`export default` must be present),
+
+Non-interactive installs:
+
+```sh
+OPENCODE_UTILS_PLUGINS="all" curl -fsSL https://raw.githubusercontent.com/rival-afk/opencode-utils/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/rival-afk/opencode-utils/main/install.sh | sh -s -- --all
+curl -fsSL https://raw.githubusercontent.com/rival-afk/opencode-utils/main/install.sh | sh -s -- --plugins "no-env s-uvazheniem"
+```
+
+Overrides (env or args): plugins dir — `OPENCODE_UTILS_PLUGINS_DIR=/path/to/plugins` / `--dest`,
+git ref — `OPENCODE_UTILS_REF=v1.2.3` / `--ref`. Windows supports `/all`, `/plugins "…"`, `/dest`, `/ref` args the same way.
+
+### Manual copy
+
 Copy the files you want into the plugins directory and restart opencode:
 
 ```sh

@@ -62,6 +62,7 @@ async function makeCtx(dir, options, plugin) {
     location: { directory: dir, project: { id: "p", directory: dir, canonical: dir } },
     tool: { hook: record },
     shell: { hook: record },
+    session: { hook: record },
     event: { subscribe: (o) => bus.subscribe(o) },
   }
   const cleanup = await plugin.setup(ctx)
@@ -78,6 +79,7 @@ async function makeCtx(dir, options, plugin) {
     before: (event) => run("execute.before", event),
     after: (event) => run("execute.after", event),
     shellBefore: (event) => run("create.before", event),
+    prompt: (event) => run("prompt", event),
   }
 }
 
@@ -323,3 +325,148 @@ test("todo-reminder: is an inert, valid V2 definition (deprecated)", async () =>
   assert.deepEqual(Object.keys(hooks), [])
   assert.match(warned, /deprecated/)
 })
+
+// ---------------------------------------------------------- s-uvazheniem ---
+
+import sUvazheniem from "../s-uvazheniem.js"
+
+const realFetch = globalThis.fetch
+function stubFetch(impl) {
+  const calls = []
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init, body: JSON.parse(init.body) })
+    return impl(url, init)
+  }
+  return calls
+}
+function restoreFetch() {
+  globalThis.fetch = realFetch
+}
+
+{
+  const dir = mkd()
+  const p = await makeCtx(dir, {}, sUvazheniem)
+
+  test("s-uvazheniem: exports a V2 plugin definition", () => {
+    assert.equal(typeof sUvazheniem.id, "string")
+    assert.equal(typeof sUvazheniem.setup, "function")
+  })
+
+  test("s-uvazheniem: translates prompts through the API", async () => {
+    const calls = stubFetch(async () => ({
+      ok: true,
+      json: async () => ({ text: "Коллега, предлагаю обсудить это в рабочем порядке.", source: "ai" }),
+    }))
+    try {
+      const ev = { prompt: { text: "ты заебал" }, metadata: {} }
+      await p.prompt(ev)
+      assert.equal(ev.prompt.text, "Коллега, предлагаю обсудить это в рабочем порядке.")
+      assert.equal(calls.length, 1)
+      assert.equal(calls[0].url, "https://s-uvazheniem-production.up.railway.app/api/translate")
+      assert.equal(calls[0].body.mode, "colleagues")
+      assert.equal(calls[0].body.level, 2)
+      assert.equal(calls[0].body.action, "translate")
+      assert.equal(ev.metadata.translatedBy, sUvazheniem.id)
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("s-uvazheniem: identical prompts are served from cache (one API call)", async () => {
+    const calls = stubFetch(async () => ({
+      ok: true,
+      json: async () => ({ text: "кэшированный ответ", source: "ai" }),
+    }))
+    try {
+      const mk = () => ({ prompt: { text: "одинаковый текст для кеша" }, metadata: {} })
+      await p.prompt(mk())
+      await p.prompt(mk())
+      assert.equal(calls.length, 1)
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("s-uvazheniem: slash commands and empty text are untouched", async () => {
+    const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "x" }) }))
+    try {
+      const cmd = { prompt: { text: "/review staged" }, metadata: {} }
+      const empty = { prompt: { text: "   " }, metadata: {} }
+      await p.prompt(cmd)
+      await p.prompt(empty)
+      assert.equal(cmd.prompt.text, "/review staged")
+      assert.equal(empty.prompt.text, "   ")
+      assert.equal(calls.length, 0)
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("s-uvazheniem: '!!' prefix bypasses translation and strips the prefix", async () => {
+    const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "x", source: "ai" }) }))
+    try {
+      const ev = { prompt: { text: "!!ты заебал" }, metadata: {} }
+      await p.prompt(ev)
+      assert.equal(ev.prompt.text, "ты заебал")
+      assert.equal(calls.length, 0)
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("s-uvazheniem: failOpen keeps the original text on API errors", async () => {
+    const pFail = await makeCtx(dir, { failOpen: true, cacheSize: 0 }, sUvazheniem)
+    const calls = stubFetch(async () => ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }))
+    try {
+      const ev = { prompt: { text: "текст с ошибкой один" }, metadata: {} }
+      await pFail.prompt(ev)
+      assert.equal(ev.prompt.text, "текст с ошибкой один")
+      assert.equal(calls.length, 1)
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("s-uvazheniem: failOpen=false aborts the prompt on API errors", async () => {
+    const pStrict = await makeCtx(dir, { failOpen: false, cacheSize: 0 }, sUvazheniem)
+    stubFetch(async () => ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }))
+    try {
+      const ev = { prompt: { text: "текст с ошибкой два" }, metadata: {} }
+      await assert.rejects(() => pStrict.prompt(ev), /boom/)
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("s-uvazheniem: disabled plugin is inert", async () => {
+    const pOff = await makeCtx(dir, { enabled: false, cacheSize: 0 }, sUvazheniem)
+    const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "x", source: "ai" }) }))
+    try {
+      const ev = { prompt: { text: "выключенный плагин" }, metadata: {} }
+      await pOff.prompt(ev)
+      assert.equal(ev.prompt.text, "выключенный плагин")
+      assert.equal(calls.length, 0)
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("s-uvazheniem: options override mode/level/baseURL", async () => {
+    const pCustom = await makeCtx(
+      dir,
+      { mode: "boss", level: 3, baseURL: "https://example.test/", cacheSize: 0 },
+      sUvazheniem,
+    )
+    const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "да, босс", source: "ai" }) }))
+    try {
+      const ev = { prompt: { text: "сделай это, иначе уволю" }, metadata: {} }
+      await pCustom.prompt(ev)
+      assert.equal(ev.prompt.text, "да, босс")
+      assert.equal(calls[0].url, "https://example.test/api/translate")
+      assert.equal(calls[0].body.mode, "boss")
+      assert.equal(calls[0].body.level, 3)
+    } finally {
+      restoreFetch()
+    }
+  })
+}

@@ -8,6 +8,7 @@ self-contained `.js` file with zero dependencies. Written for **opencode V2**
 | --- | --- |
 | [`no-env.js`](#no-envjs) | `.env` is writable and usable via `$VAR`, but its contents never reach the model |
 | [`commands-banlist.js`](#commands-banlistjs) | Shell commands matching `~/.config/opencode/banlist` are refused, even when nested (`ssh -c "pgrep"`) |
+| [`s-uvazheniem.js`](#s-uvazheniemjs) | Every user prompt is rewritten into corporate-respectful Russian before it reaches the model («С Уважением» API) |
 | [`todo-reminder.js`](#todo-reminderjs) | **Deprecated on V2** — V2 removed the todo tool/events; kept as an inert stub |
 
 Blocked calls fail **with a message in the tool response itself**
@@ -132,6 +133,48 @@ Options: `{ "enabled": true, "path": "/custom/banlist" }`.
 
 ---
 
+## s-uvazheniem.js
+
+Rewrites **every user prompt** into corporate-respectful Russian before the
+model ever sees it — via the public [«С УВАЖЕНИЕМ.»](https://s-uvazheniem-production.up.railway.app/)
+mini-app API (Telegram bot [@uvashenie_bot](https://t.me/uvashenie_bot),
+"с человеческого на корпоративный").
+
+```
+ты заебал -> Коллега, предлагаю синхронизироваться по формату взаимодействия…
+```
+
+Implemented as a single `session.hook("prompt", …)` — the text is rewritten once
+at **admission time**, before it is persisted or sent to the model. Assistant
+messages, system instructions and tool results are left untouched.
+
+- `"/review staged"`-style slash commands are never touched
+- a prompt starting with `!!` is forwarded unchanged, prefix stripped (`rawPrefix`)
+- identical prompts are answered from an in-memory LRU cache (`cacheSize`, default 200)
+- on API errors the original text passes through unchanged by default (`failOpen`)
+- translation is **not** authoritative: the API is a joke-as-a-service. Review output before sending
+
+Options:
+
+```jsonc
+// ["s-uvazheniem.js", { ... }]
+{
+  "enabled": true,       // master switch
+  "mode": "colleagues",  // "hr" | "colleagues" | "boss" | "reverse"
+  "level": 2,            // 1 "Почти человек" · 2 "Корпоративный сотрудник" · 3 "HR-директор 3000"
+  "baseURL": "https://s-uvazheniem-production.up.railway.app",
+  "timeoutMs": 15000,    // abort slow API calls
+  "failOpen": true,      // true (default) | false — false blocks the prompt on API errors
+  "skipCommands": true,  // never touch text starting with "/"
+  "rawPrefix": "!!",     // bypass prefix; "" disables the escape hatch
+  "cacheSize": 200       // in-memory LRU of translations; 0 disables
+}
+```
+
+No Telegram account, login or `initData` required — the API is public HTTPS.
+
+---
+
 ## todo-reminder.js
 
 **Deprecated on opencode V2.** V2 removed both the `todowrite` tool and the
@@ -154,7 +197,7 @@ Do **not** copy `todo-reminder.js` into `~/.config/opencode/plugins/` on V2.
 npm test        # node --test
 ```
 
-24 smoke tests run the plugins against a fake V2 `ctx` (hook registry + event
+34 smoke tests run the plugins against a fake V2 `ctx` (hook registry + event
 bus): blocking/allow matrices, nested-command unwrapping, banlist hot reload,
 output redaction, disk re-scan and the deprecated stub.
 

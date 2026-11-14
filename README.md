@@ -8,7 +8,7 @@ self-contained `.js` file with zero dependencies. Written for **opencode V2**
 | --- | --- |
 | [`no-env.js`](#no-envjs) | `.env` is writable and usable via `$VAR`, but its contents never reach the model |
 | [`commands-banlist.js`](#commands-banlistjs) | Shell commands matching `~/.config/opencode/banlist` are refused, even when nested (`ssh -c "pgrep"`) |
-| [`s-uvazheniem.js`](#s-uvazheniemjs) | Every user prompt is rewritten into corporate-respectful Russian before it reaches the model («С Уважением» API) |
+| [`polite.js`](#politejs) | User prompts into corporate-respectful Russian via «С Уважением» — each rewrite asks first |
 | [`todo-reminder.js`](#todo-reminderjs) | **Deprecated on V2** — V2 removed the todo tool/events; kept as an inert stub |
 
 Blocked calls fail **with a message in the tool response itself**
@@ -45,7 +45,7 @@ Non-interactive installs:
 ```sh
 OPENCODE_UTILS_PLUGINS="all" curl -fsSL https://raw.githubusercontent.com/rival-afk/opencode-utils/main/install.sh | sh
 curl -fsSL https://raw.githubusercontent.com/rival-afk/opencode-utils/main/install.sh | sh -s -- --all
-curl -fsSL https://raw.githubusercontent.com/rival-afk/opencode-utils/main/install.sh | sh -s -- --plugins "no-env s-uvazheniem"
+curl -fsSL https://raw.githubusercontent.com/rival-afk/opencode-utils/main/install.sh | sh -s -- --plugins "no-env polite"
 ```
 
 Overrides (env or args): plugins dir — `OPENCODE_UTILS_PLUGINS_DIR=/path/to/plugins` / `--dest`,
@@ -168,7 +168,7 @@ Options: `{ "enabled": true, "path": "/custom/banlist" }`.
 
 ---
 
-## s-uvazheniem.js
+## polite.js
 
 Rewrites **every user prompt** into corporate-respectful Russian before the
 model ever sees it — via the public [«С УВАЖЕНИЕМ.»](https://s-uvazheniem-production.up.railway.app/)
@@ -183,16 +183,25 @@ Implemented as a single `session.hook("prompt", …)` — the text is rewritten 
 at **admission time**, before it is persisted or sent to the model. Assistant
 messages, system instructions and tool results are left untouched.
 
+**The plugin never changes a message silently.** Before every rewrite it asks
+the user in opencode's built-in permission dialog — **Да / Нет**, switch with
+←/→, confirm with Enter. «Нет» — the prompt goes out exactly as typed.
+Permission rules apply, but the plugin deliberately passes no `save` patterns,
+so there is no «всегда изменять» (always rewrite) choice to pick: every
+message requires its own decision.
+
 - `"/review staged"`-style slash commands are never touched
 - a prompt starting with `!!` is forwarded unchanged, prefix stripped (`rawPrefix`)
 - identical prompts are answered from an in-memory LRU cache (`cacheSize`, default 200)
 - on API errors the original text passes through unchanged by default (`failOpen`)
+- if `ctx.permission.assert` is unavailable (older opencode), the plugin does **not**
+  rewrite messages at all — nothing changes silently
 - translation is **not** authoritative: the API is a joke-as-a-service. Review output before sending
 
 Options:
 
 ```jsonc
-// ["s-uvazheniem.js", { ... }]
+// ["polite.js", { ... }]
 {
   "enabled": true,       // master switch
   "mode": "colleagues",  // "hr" | "colleagues" | "boss" | "reverse"
@@ -207,6 +216,8 @@ Options:
 ```
 
 No Telegram account, login or `initData` required — the API is public HTTPS.
+(Renamed from `s-uvazheniem.js`; old file name no longer works — remove it from
+your plugins directory if present and re-install.)
 
 ---
 
@@ -232,7 +243,7 @@ Do **not** copy `todo-reminder.js` into `~/.config/opencode/plugins/` on V2.
 npm test        # node --test
 ```
 
-34 smoke tests run the plugins against a fake V2 `ctx` (hook registry + event
+38 smoke tests run the plugins against a fake V2 `ctx` (hook registry + event
 bus): blocking/allow matrices, nested-command unwrapping, banlist hot reload,
 output redaction, disk re-scan and the deprecated stub.
 

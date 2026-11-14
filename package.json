@@ -1,7 +1,7 @@
 {
   "name": "opencode-utils",
   "version": "1.0.0",
-  "description": "Standalone opencode plugins: no-env, commands-banlist, todo-reminder",
+  "description": "Standalone opencode plugins: no-env, commands-banlist, polite (s-uvazheniem), todo-reminder",
   "type": "module",
   "license": "MIT",
   "private": true,

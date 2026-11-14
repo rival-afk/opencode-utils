@@ -51,6 +51,7 @@ function makeBus() {
 // A fake V2 plugin context that records registered hooks.
 async function makeCtx(dir, options, plugin) {
   const hooks = {}
+  const permissionCalls = []
   const bus = makeBus()
   const record = async (name, cb) => {
     ;(hooks[name] ??= []).push(cb)
@@ -64,6 +65,21 @@ async function makeCtx(dir, options, plugin) {
     shell: { hook: record },
     session: { hook: record },
     event: { subscribe: (o) => bus.subscribe(o) },
+    ...(options?.__noPermission
+      ? {}
+      : {
+          permission: {
+            async assert(args) {
+              permissionCalls.push(args)
+              if (options?.__denyPrompt) {
+                const err = new Error("permission denied")
+                err.name = "Tool.Error"
+                throw err
+              }
+              return { allowed: true }
+            },
+          },
+        }),
   }
   const cleanup = await plugin.setup(ctx)
   await new Promise((r) => setTimeout(r, 0)) // let the event loop subscribe
@@ -76,6 +92,7 @@ async function makeCtx(dir, options, plugin) {
     hooks,
     bus,
     cleanup,
+    permissionCalls,
     before: (event) => run("execute.before", event),
     after: (event) => run("execute.after", event),
     shellBefore: (event) => run("create.before", event),
@@ -326,9 +343,9 @@ test("todo-reminder: is an inert, valid V2 definition (deprecated)", async () =>
   assert.match(warned, /deprecated/)
 })
 
-// ---------------------------------------------------------- s-uvazheniem ---
+// ---------------------------------------------------------- polite ---
 
-import sUvazheniem from "../s-uvazheniem.js"
+import polite from "../polite.js"
 
 const realFetch = globalThis.fetch
 function stubFetch(impl) {
@@ -345,20 +362,20 @@ function restoreFetch() {
 
 {
   const dir = mkd()
-  const p = await makeCtx(dir, {}, sUvazheniem)
+  const p = await makeCtx(dir, {}, polite)
 
-  test("s-uvazheniem: exports a V2 plugin definition", () => {
-    assert.equal(typeof sUvazheniem.id, "string")
-    assert.equal(typeof sUvazheniem.setup, "function")
+  test("polite: exports a V2 plugin definition", () => {
+    assert.equal(typeof polite.id, "string")
+    assert.equal(typeof polite.setup, "function")
   })
 
-  test("s-uvazheniem: translates prompts through the API", async () => {
+  test("polite: translates prompts through the API", async () => {
     const calls = stubFetch(async () => ({
       ok: true,
       json: async () => ({ text: "Коллега, предлагаю обсудить это в рабочем порядке.", source: "ai" }),
     }))
     try {
-      const ev = { prompt: { text: "ты заебал" }, metadata: {} }
+      const ev = { prompt: { text: "ты заебал" }, sessionID: "s1", agent: "build", metadata: {} }
       await p.prompt(ev)
       assert.equal(ev.prompt.text, "Коллега, предлагаю обсудить это в рабочем порядке.")
       assert.equal(calls.length, 1)
@@ -366,19 +383,19 @@ function restoreFetch() {
       assert.equal(calls[0].body.mode, "colleagues")
       assert.equal(calls[0].body.level, 2)
       assert.equal(calls[0].body.action, "translate")
-      assert.equal(ev.metadata.translatedBy, sUvazheniem.id)
+      assert.equal(ev.metadata.translatedBy, polite.id)
     } finally {
       restoreFetch()
     }
   })
 
-  test("s-uvazheniem: identical prompts are served from cache (one API call)", async () => {
+  test("polite: identical prompts are served from cache (one API call)", async () => {
     const calls = stubFetch(async () => ({
       ok: true,
       json: async () => ({ text: "кэшированный ответ", source: "ai" }),
     }))
     try {
-      const mk = () => ({ prompt: { text: "одинаковый текст для кеша" }, metadata: {} })
+      const mk = () => ({ prompt: { text: "одинаковый текст для кеша" }, sessionID: "s1", agent: "build", metadata: {} })
       await p.prompt(mk())
       await p.prompt(mk())
       assert.equal(calls.length, 1)
@@ -387,11 +404,11 @@ function restoreFetch() {
     }
   })
 
-  test("s-uvazheniem: slash commands and empty text are untouched", async () => {
+  test("polite: slash commands and empty text are untouched", async () => {
     const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "x" }) }))
     try {
-      const cmd = { prompt: { text: "/review staged" }, metadata: {} }
-      const empty = { prompt: { text: "   " }, metadata: {} }
+      const cmd = { prompt: { text: "/review staged" }, sessionID: "s1", agent: "build", metadata: {} }
+      const empty = { prompt: { text: "   " }, sessionID: "s1", agent: "build", metadata: {} }
       await p.prompt(cmd)
       await p.prompt(empty)
       assert.equal(cmd.prompt.text, "/review staged")
@@ -402,10 +419,10 @@ function restoreFetch() {
     }
   })
 
-  test("s-uvazheniem: '!!' prefix bypasses translation and strips the prefix", async () => {
+  test("polite: '!!' prefix bypasses translation and strips the prefix", async () => {
     const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "x", source: "ai" }) }))
     try {
-      const ev = { prompt: { text: "!!ты заебал" }, metadata: {} }
+      const ev = { prompt: { text: "!!ты заебал" }, sessionID: "s1", agent: "build", metadata: {} }
       await p.prompt(ev)
       assert.equal(ev.prompt.text, "ты заебал")
       assert.equal(calls.length, 0)
@@ -414,11 +431,11 @@ function restoreFetch() {
     }
   })
 
-  test("s-uvazheniem: failOpen keeps the original text on API errors", async () => {
-    const pFail = await makeCtx(dir, { failOpen: true, cacheSize: 0 }, sUvazheniem)
+  test("polite: failOpen keeps the original text on API errors", async () => {
+    const pFail = await makeCtx(dir, { failOpen: true, cacheSize: 0 }, polite)
     const calls = stubFetch(async () => ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }))
     try {
-      const ev = { prompt: { text: "текст с ошибкой один" }, metadata: {} }
+      const ev = { prompt: { text: "текст с ошибкой один" }, sessionID: "s1", agent: "build", metadata: {} }
       await pFail.prompt(ev)
       assert.equal(ev.prompt.text, "текст с ошибкой один")
       assert.equal(calls.length, 1)
@@ -427,22 +444,22 @@ function restoreFetch() {
     }
   })
 
-  test("s-uvazheniem: failOpen=false aborts the prompt on API errors", async () => {
-    const pStrict = await makeCtx(dir, { failOpen: false, cacheSize: 0 }, sUvazheniem)
+  test("polite: failOpen=false aborts the prompt on API errors", async () => {
+    const pStrict = await makeCtx(dir, { failOpen: false, cacheSize: 0 }, polite)
     stubFetch(async () => ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }))
     try {
-      const ev = { prompt: { text: "текст с ошибкой два" }, metadata: {} }
+      const ev = { prompt: { text: "текст с ошибкой два" }, sessionID: "s1", agent: "build", metadata: {} }
       await assert.rejects(() => pStrict.prompt(ev), /boom/)
     } finally {
       restoreFetch()
     }
   })
 
-  test("s-uvazheniem: disabled plugin is inert", async () => {
-    const pOff = await makeCtx(dir, { enabled: false, cacheSize: 0 }, sUvazheniem)
+  test("polite: disabled plugin is inert", async () => {
+    const pOff = await makeCtx(dir, { enabled: false, cacheSize: 0 }, polite)
     const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "x", source: "ai" }) }))
     try {
-      const ev = { prompt: { text: "выключенный плагин" }, metadata: {} }
+      const ev = { prompt: { text: "выключенный плагин" }, sessionID: "s1", agent: "build", metadata: {} }
       await pOff.prompt(ev)
       assert.equal(ev.prompt.text, "выключенный плагин")
       assert.equal(calls.length, 0)
@@ -451,20 +468,85 @@ function restoreFetch() {
     }
   })
 
-  test("s-uvazheniem: options override mode/level/baseURL", async () => {
+  test("polite: options override mode/level/baseURL", async () => {
     const pCustom = await makeCtx(
       dir,
       { mode: "boss", level: 3, baseURL: "https://example.test/", cacheSize: 0 },
-      sUvazheniem,
+      polite,
     )
     const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "да, босс", source: "ai" }) }))
     try {
-      const ev = { prompt: { text: "сделай это, иначе уволю" }, metadata: {} }
+      const ev = { prompt: { text: "сделай это, иначе уволю" }, sessionID: "s1", agent: "build", metadata: {} }
       await pCustom.prompt(ev)
       assert.equal(ev.prompt.text, "да, босс")
       assert.equal(calls[0].url, "https://example.test/api/translate")
       assert.equal(calls[0].body.mode, "boss")
       assert.equal(calls[0].body.level, 3)
+    } finally {
+      restoreFetch()
+    }
+  })
+}
+
+// -------------------------------------------------- polite: permission ---
+
+{
+  const dir = mkd()
+
+  test("polite: asks the user before rewriting (permission dialog)", async () => {
+    const pAsk = await makeCtx(dir, { cacheSize: 0 }, polite)
+    const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "корпоративно", source: "ai" }) }))
+    try {
+      const ev = { prompt: { text: "ты заебал" }, sessionID: "s9", agent: "build", metadata: {} }
+      await pAsk.prompt(ev)
+      assert.equal(ev.prompt.text, "корпоративно")
+      assert.equal(calls.length, 1)
+      assert.equal(pAsk.permissionCalls.length, 1)
+      assert.equal(pAsk.permissionCalls[0].action, "polite.rewrite")
+      assert.deepEqual(pAsk.permissionCalls[0].resources, ["prompt"])
+      assert.equal(pAsk.permissionCalls[0].sessionID, "s9")
+      assert.equal(pAsk.permissionCalls[0].agent, "build")
+      assert.equal(pAsk.permissionCalls[0].metadata.mode, "colleagues")
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("polite: denied permission leaves the original text and never calls the API", async () => {
+    const pDeny = await makeCtx(dir, { __denyPrompt: true, cacheSize: 0 }, polite)
+    const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "корпоративно", source: "ai" }) }))
+    try {
+      const ev = { prompt: { text: "не трогай меня" }, sessionID: "s9", agent: "build", metadata: {} }
+      await pDeny.prompt(ev) // rejection is swallowed: keep original
+      assert.equal(ev.prompt.text, "не трогай меня")
+      assert.equal(calls.length, 0)
+      assert.equal(pDeny.permissionCalls.length, 1)
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("polite: the permission dialog exposes no 'always allow' path (no save patterns)", async () => {
+    const pAsk = await makeCtx(dir, { cacheSize: 0 }, polite)
+    stubFetch(async () => ({ ok: true, json: async () => ({ text: "корпоративно", source: "ai" }) }))
+    try {
+      const ev = { prompt: { text: "каждое сообщение — свой вопрос" }, sessionID: "s9", agent: "build", metadata: {} }
+      await pAsk.prompt(ev)
+      assert.equal(pAsk.permissionCalls.length, 1)
+      assert.equal(pAsk.permissionCalls[0].save, undefined)
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("polite: missing permission API rewrites nothing (no silent rewrite)", async () => {
+    const pNoPerm = await makeCtx(dir, { __noPermission: true, cacheSize: 0 }, polite)
+    const calls = stubFetch(async () => ({ ok: true, json: async () => ({ text: "корпоративно", source: "ai" }) }))
+    try {
+      const ev = { prompt: { text: "нет opencode permission API" }, sessionID: "s9", agent: "build", metadata: {} }
+      await pNoPerm.prompt(ev)
+      assert.equal(ev.prompt.text, "нет opencode permission API")
+      assert.equal(calls.length, 0)
     } finally {
       restoreFetch()
     }

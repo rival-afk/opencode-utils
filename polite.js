@@ -1,21 +1,27 @@
-// s-uvazheniem.js — opencode plugin (V2)
+// polite.js — opencode plugin (V2)  (бывш. «С УВАЖЕНИЕМ.» / s-uvazheniem.js)
 //
-// Automatically rewrites every user message into corporate-respectful Russian
-// before it reaches the model, using the public "С УВАЖЕНИЕМ." mini-app API
-// (bot @uvashenie_bot) — "с человеческого на корпоративный и обратно":
+// Rewrites every user message into corporate-respectful Russian before it
+// reaches the model, using the public «С УВАЖЕНИЕМ.» mini-app API (bot
+// @uvashenie_bot) — "с человеческого на корпоративный и обратно":
 //   POST https://s-uvazheniem-production.up.railway.app/api/translate
 //
 //   "ты заебал" -> "Коллега, предлагаю синхронизироваться по формату взаимодействия…"
 //
-// What it does: a single `prompt` hook (admission time — once per submitted
+// How it works: a single `prompt` hook (admission time — once per submitted
 // message, before the text is persisted or sent to the model). Assistant
 // messages, system instructions and tool results are left untouched.
+//
+// Важно: плагин НИКОГДА не меняет сообщение молча. Перед изменением
+// КАЖДОГО сообщения он спрашивает подтверждение через встроенный
+// permission-диалог opencode (стрелки ←/→ переключают Да/Нет, Enter
+// подтверждает). «Нет» — сообщение уходит как есть. «Изменять всегда,
+// не спрашивая» опции нет и не будет: каждый промпт требует своего решения.
 //
 // Escape hatch: a message starting with the raw prefix (default "!!") is
 // forwarded unchanged, with the prefix stripped. Messages starting with "/"
 // (slash commands) are never touched.
 //
-// Options (object form in opencode.json: { package: "./s-uvazheniem.js", options: {...} }):
+// Options (object form in opencode.json: { package: "./polite.js", options: {...} }):
 //   enabled:    true|false      (default true)
 //   mode:       "colleagues" | "boss" | "hr" | "reverse"   (default "colleagues")
 //   level:      1..3            (default 2 — "Корпоративный сотрудник")
@@ -29,10 +35,12 @@
 //
 // OpenCode V2 plugin API: default export { id, setup(ctx) }.
 
-export const id = "opencode.utils.s-uvazheniem"
+export const id = "opencode.utils.polite"
 
 export const DEFAULT_BASE_URL = "https://s-uvazheniem-production.up.railway.app"
 export const MODES = new Set(["hr", "colleagues", "boss", "reverse"])
+export const PERMISSION_ACTION = "polite.rewrite"
+export const PERMISSION_RESOURCE = "prompt"
 
 export function makeTranslator(opts = {}) {
   const baseURL = String(opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "")
@@ -99,7 +107,7 @@ export function makeTranslator(opts = {}) {
       return result
     } catch (err) {
       if (failOpen) {
-        console.error(`s-uvazheniem: translation failed, keeping original text (${err?.message ?? err})`)
+        console.error(`polite: translation failed, keeping original text (${err?.message ?? err})`)
         return text
       }
       throw err
@@ -130,9 +138,15 @@ export async function setup(ctx) {
   const t = makeTranslator(opts)
   if (enabled) {
     console.log(
-      `s-uvazheniem: prompts will be translated via ${t.baseURL} ` +
-        `(mode=${t.mode}, level=${t.level}${opts.failOpen === false ? ", fail-closed" : ""})`,
+      `polite: prompts will be translated via ${t.baseURL} ` +
+        `(mode=${t.mode}, level=${t.level}${opts.failOpen === false ? ", fail-closed" : ""}, ` +
+        `ask before every rewrite)`,
     )
+    if (typeof ctx.permission?.assert !== "function") {
+      console.warn(
+        "polite: ctx.permission.assert is unavailable in this opencode version — plugin will NOT rewrite messages silently",
+      )
+    }
   }
 
   await ctx.session.hook("prompt", async (event) => {
@@ -148,6 +162,23 @@ export async function setup(ctx) {
     if (raw !== null) {
       prompt.text = raw
       return
+    }
+
+    // Спрашиваем ТОЛЬКО перед изменением сообщения — и только для него.
+    if (typeof ctx.permission?.assert !== "function") {
+      // Старое поведение (молчаливый рерайт) недопустимо: не трогаем сообщение.
+      return
+    }
+    try {
+      await ctx.permission.assert({
+        sessionID: event.sessionID,
+        agent: event.agent,
+        action: PERMISSION_ACTION,
+        resources: [PERMISSION_RESOURCE],
+        metadata: { reason: "rewrite prompt into corporate Russian (yes = rewrite, no = keep as-is)", mode: t.mode, level: t.level },
+      })
+    } catch {
+      return // «Нет» / deny — сообщение остаётся как есть
     }
 
     const translated = await t.translate(text)

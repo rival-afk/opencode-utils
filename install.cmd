@@ -10,7 +10,7 @@ rem
 rem Non-interactive:
 rem   set OPENCODE_UTILS_PLUGINS=all ^&^& curl -fsSL .../install.cmd -o "%TEMP%\ou-install.cmd" ^&^& "%TEMP%\ou-install.cmd"
 rem   "%TEMP%\ou-install.cmd" /all
-rem   "%TEMP%\ou-install.cmd" /plugins "no-env s-uvazheniem"
+rem   "%TEMP%\ou-install.cmd" /plugins "no-env polite"
 rem
 rem Overrides (env or args):
 rem   REF       git ref to download from (default: main)              / /ref
@@ -32,7 +32,7 @@ set "PLUGIN1=no-env"
 set "DESC1=.env readable as $VAR - contents never reach the model"
 set "PLUGIN2=commands-banlist"
 set "DESC2=refuse shell commands matching banlist in .config\opencode\banlist"
-set "PLUGIN3=s-uvazheniem"
+set "PLUGIN3=polite"
 set "DESC3=rewrite every prompt into corporate Russian (S Uvazheniem API)"
 
 :args
@@ -141,9 +141,9 @@ echo neither curl nor powershell found - cannot download %~1
 exit /b 1
 
 :usage
-echo usage: %~nx0 [/all] [/plugins "no-env s-uvazheniem"] [/dest DIR] [/ref REF] [/?]
+echo usage: %~nx0 [/all] [/plugins "no-env polite"] [/dest DIR] [/ref REF] [/?]
 echo   /all              install all plugins, no questions
-echo   /plugins LIST     space-separated plugin numbers or names, e.g. "no-env s-uvazheniem"
+echo   /plugins LIST     space-separated plugin numbers or names, e.g. "no-env polite"
 echo   /dest DIR         plugins directory (default: %%USERPROFILE%%\.config\opencode\plugins)
 echo   /ref REF          git ref to download from (default: main)
 exit /b 0

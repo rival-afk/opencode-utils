@@ -9,7 +9,7 @@
 #
 # Non-interactive (no /dev/tty, CI, …):
 #   OPENCODE_UTILS_PLUGINS="all" curl -fsSL …/install.sh | sh
-#   curl -fsSL …/install.sh | sh -s -- --plugins "no-env s-uvazheniem"
+#   curl -fsSL …/install.sh | sh -s -- --plugins "no-env polite"
 #   curl -fsSL …/install.sh | sh -s -- --all
 #
 # Overrides (env or args):
@@ -29,7 +29,7 @@ usage() {
   cat <<EOF
 usage: install.sh [--plugins LIST|--all] [--dest DIR] [--ref REF] [--help]
 
-  LIST   "all" or space-separated plugin numbers/names, e.g. "no-env s-uvazheniem"
+  LIST   "all" or space-separated plugin numbers/names, e.g. "no-env polite"
   DIR    plugins directory (default: ~/.config/opencode/plugins)
   REF    git ref to download from (default: main)
 EOF
@@ -53,12 +53,12 @@ done
 [ -n "$DEST" ] || DEST="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins"
 REPO_RAW="https://raw.githubusercontent.com/$REPO/$REF"
 
-PLUGIN_NAMES="no-env commands-banlist s-uvazheniem"
+PLUGIN_NAMES="no-env commands-banlist polite"
 plugin_desc() {
   case "$1" in
     no-env)          echo '.env readable only as $VAR — contents never reach the model' ;;
     commands-banlist) echo 'refuse shell commands matching ~/.config/opencode/banlist' ;;
-    s-uvazheniem)    echo 'rewrite every prompt into corporate Russian via «С УВАЖЕНИЕМ.»' ;;
+    polite)    echo 'rewrite every prompt into corporate Russian via «С УВАЖЕНИЕМ.»' ;;
     *)               echo '' ;;
   esac
 }
@@ -112,8 +112,8 @@ else
     case "$token" in
       1) name=no-env ;;
       2) name=commands-banlist ;;
-      3) name=s-uvazheniem ;;
-      no-env|commands-banlist|s-uvazheniem) name="$token" ;;
+      3) name=polite ;;
+      no-env|commands-banlist|polite) name="$token" ;;
       *) echo "${R}install.sh: unknown plugin: '$token'${N}" >&2; exit 1 ;;
     esac
     case " $SELECTED " in

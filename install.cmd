@@ -34,6 +34,8 @@ set "PLUGIN2=commands-banlist"
 set "DESC2=refuse shell commands matching banlist in .config\opencode\banlist"
 set "PLUGIN3=polite"
 set "DESC3=rewrite every prompt into corporate Russian (S Uvazheniem API)"
+set "PLUGIN4=sandbox"
+set "DESC4=sandbox mode: factual system note + tools confined to the workspace"
 
 :args
 if "%~1"=="" goto done_args
@@ -55,6 +57,7 @@ echo available plugins:
 echo   1) %PLUGIN1%          %DESC1%
 echo   2) %PLUGIN2%   %DESC2%
 echo   3) %PLUGIN3%      %DESC3%
+echo   4) %PLUGIN4%         %DESC4%
 echo.
 
 if not defined SEL (
@@ -64,7 +67,7 @@ if not defined SEL (
 
 set "JOBS="
 if /i "!SEL!"=="all" (
-  set "JOBS=%PLUGIN1% %PLUGIN2% %PLUGIN3%"
+  set "JOBS=%PLUGIN1% %PLUGIN2% %PLUGIN3% %PLUGIN4%"
 ) else (
   for %%T in (!SEL!) do call :pick "%%~T"
 )
@@ -95,10 +98,12 @@ set "T=%~1"
 if /i "!T!"=="1" set "T=%PLUGIN1%"
 if /i "!T!"=="2" set "T=%PLUGIN2%"
 if /i "!T!"=="3" set "T=%PLUGIN3%"
+if /i "!T!"=="4" set "T=%PLUGIN4%"
 set "OK="
 if /i "!T!"=="%PLUGIN1%" set "OK=1"
 if /i "!T!"=="%PLUGIN2%" set "OK=1"
 if /i "!T!"=="%PLUGIN3%" set "OK=1"
+if /i "!T!"=="%PLUGIN4%" set "OK=1"
 if not defined OK (
   echo unknown plugin: '!T!'
   exit /b 1
@@ -143,7 +148,7 @@ exit /b 1
 :usage
 echo usage: %~nx0 [/all] [/plugins "no-env polite"] [/dest DIR] [/ref REF] [/?]
 echo   /all              install all plugins, no questions
-echo   /plugins LIST     space-separated plugin numbers or names, e.g. "no-env polite"
+echo   /plugins LIST     space-separated plugin numbers or names, e.g. "no-env sandbox"
 echo   /dest DIR         plugins directory (default: %%USERPROFILE%%\.config\opencode\plugins)
 echo   /ref REF          git ref to download from (default: main)
 exit /b 0

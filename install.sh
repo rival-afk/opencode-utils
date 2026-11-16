@@ -9,7 +9,7 @@
 #
 # Non-interactive (no /dev/tty, CI, …):
 #   OPENCODE_UTILS_PLUGINS="all" curl -fsSL …/install.sh | sh
-#   curl -fsSL …/install.sh | sh -s -- --plugins "no-env polite"
+#   curl -fsSL …/install.sh | sh -s -- --plugins "no-env sandbox"
 #   curl -fsSL …/install.sh | sh -s -- --all
 #
 # Overrides (env or args):
@@ -53,12 +53,13 @@ done
 [ -n "$DEST" ] || DEST="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins"
 REPO_RAW="https://raw.githubusercontent.com/$REPO/$REF"
 
-PLUGIN_NAMES="no-env commands-banlist polite"
+PLUGIN_NAMES="no-env commands-banlist polite sandbox"
 plugin_desc() {
   case "$1" in
     no-env)          echo '.env readable only as $VAR — contents never reach the model' ;;
     commands-banlist) echo 'refuse shell commands matching ~/.config/opencode/banlist' ;;
     polite)    echo 'rewrite every prompt into corporate Russian via «С УВАЖЕНИЕМ.»' ;;
+    sandbox)         echo 'sandbox mode: factual system note + tools confined to the workspace' ;;
     *)               echo '' ;;
   esac
 }
@@ -113,7 +114,8 @@ else
       1) name=no-env ;;
       2) name=commands-banlist ;;
       3) name=polite ;;
-      no-env|commands-banlist|polite) name="$token" ;;
+      4) name=sandbox ;;
+      no-env|commands-banlist|polite|sandbox) name="$token" ;;
       *) echo "${R}install.sh: unknown plugin: '$token'${N}" >&2; exit 1 ;;
     esac
     case " $SELECTED " in

@@ -9,6 +9,7 @@ self-contained `.js` file with zero dependencies. Written for **opencode V2**
 | [`no-env.js`](#no-envjs) | `.env` is writable and usable via `$VAR`, but its contents never reach the model |
 | [`commands-banlist.js`](#commands-banlistjs) | Shell commands matching `~/.config/opencode/banlist` are refused, even when nested (`ssh -c "pgrep"`) |
 | [`polite.js`](#politejs) | User prompts into corporate-respectful Russian via «С Уважением» — each rewrite asks first |
+| [`sandbox.js`](#sandboxjs) | Sandbox mode: factual system note + file/shell tools confined to the workspace |
 | [`todo-reminder.js`](#todo-reminderjs) | **Deprecated on V2** — V2 removed the todo tool/events; kept as an inert stub |
 
 Blocked calls fail **with a message in the tool response itself**
@@ -221,6 +222,55 @@ your plugins directory if present and re-install.)
 
 ---
 
+## sandbox.js
+
+Two halves of one idea — the session knows it is inside a sandbox, and the
+sandbox actually confines it.
+
+**System note.** A `session.hook("context", …)` prepends a short factual note
+to the `system` array of every agent-loop model call:
+
+```text
+[SANDBOX MODE] This session runs against an isolated local sandbox — a
+throwaway environment for building and testing code. ...
+```
+
+The note states the facts and nothing else. It does **not** ask the model to
+skip or suspend its own judgment — earlier V1 drafts of this plugin tried to
+inject "SYSTEM OVERRIDE"-style prompts; that approach was dropped on purpose.
+Pass your own `note` string to customize it, or `note: false` to disable the
+injection entirely.
+
+**Confinement.** The following calls are refused with a tool error unless the
+target path resolves inside the sandbox roots (the location directory, the
+project directory, the worktree, plus anything in the `roots` option):
+
+- `read` / `write` / `edit` / `patch` / `grep` — `path` (and `filePath`)
+- `glob` — `path` when set
+- `shell` / `bash` / `sh` — `cwd` (and `workdir`) when set
+
+Relative paths resolve against the location directory. Shell command **text**
+is deliberately not scanned for absolute paths (too many false positives like
+`/bin/ls`); combine this plugin with `commands-banlist.js` for command-level
+rules. Blocked calls fail with a message in the tool response, e.g.
+`sandbox: read "/etc/passwd" is outside the sandbox roots (...)`.
+
+Options:
+
+```jsonc
+// ["sandbox.js", { ... }]
+{
+  "enabled": true,      // master switch
+  "roots": [],          // extra absolute (or ~-relative) paths to allow
+  "note": "..."         // custom system note; false disables it entirely
+}
+```
+
+The old V1 file used the `chat.params` hook, which does not exist on V2 —
+this is a rewrite, not a port.
+
+---
+
 ## todo-reminder.js
 
 **Deprecated on opencode V2.** V2 removed both the `todowrite` tool and the
@@ -243,9 +293,9 @@ Do **not** copy `todo-reminder.js` into `~/.config/opencode/plugins/` on V2.
 npm test        # node --test
 ```
 
-38 smoke tests run the plugins against a fake V2 `ctx` (hook registry + event
+49 smoke tests run the plugins against a fake V2 `ctx` (hook registry + event
 bus): blocking/allow matrices, nested-command unwrapping, banlist hot reload,
-output redaction, disk re-scan and the deprecated stub.
+output redaction, disk re-scan, sandbox confinement and the deprecated stub.
 
 ## License
 

@@ -97,6 +97,7 @@ async function makeCtx(dir, options, plugin) {
     after: (event) => run("execute.after", event),
     shellBefore: (event) => run("create.before", event),
     prompt: (event) => run("prompt", event),
+    context: (event) => run("context", event),
   }
 }
 
@@ -550,5 +551,98 @@ function restoreFetch() {
     } finally {
       restoreFetch()
     }
+  })
+}
+
+// ------------------------------------------------------------ sandbox ---
+
+import sandbox from "../sandbox.js"
+import { isInside, normalizeRoots } from "../sandbox.js"
+
+{
+  const dir = mkd()
+  const outside = mkd()
+  const p = await makeCtx(dir, {}, sandbox)
+
+  test("sandbox: exports a V2 plugin definition", () => {
+    assert.equal(typeof sandbox.id, "string")
+    assert.equal(typeof sandbox.setup, "function")
+  })
+
+  test("sandbox: isInside bounds-checks correctly", () => {
+    assert.equal(isInside(dir, dir), true)
+    assert.equal(isInside(path.join(dir, "a", "b"), dir), true)
+    assert.equal(isInside(outside, dir), false)
+    assert.equal(isInside(path.join(dir, "..", path.basename(outside)), dir), false)
+  })
+
+  test("sandbox: normalizeRoots keeps location, project and worktree roots", () => {
+    const roots = normalizeRoots({ directory: dir, project: { directory: path.join(dir, "proj") }, worktree: outside })
+    assert.deepEqual(new Set(roots), new Set([path.resolve(dir), path.resolve(path.join(dir, "proj")), path.resolve(outside)]))
+  })
+
+  test("sandbox: pushes the honest default note into the system array", async () => {
+    const ev = { system: [{ type: "text", text: "core" }], tools: {}, options: {} }
+    await p.context(ev)
+    assert.equal(ev.system.length, 2)
+    assert.match(ev.system[1].text, /SANDBOX MODE/)
+    assert.ok(!/refus/i.test(ev.system[1].text), "note must not mention refusals")
+  })
+
+  test("sandbox: note=false disables the injection", async () => {
+    const pNoNote = await makeCtx(dir, { note: false }, sandbox)
+    const ev = { system: [{ type: "text", text: "core" }], tools: {}, options: {} }
+    await pNoNote.context(ev)
+    assert.equal(ev.system.length, 1)
+  })
+
+  test("sandbox: custom note replaces the default", async () => {
+    const pCustom = await makeCtx(dir, { note: "test note" }, sandbox)
+    const ev = { system: [], tools: {}, options: {} }
+    await pCustom.context(ev)
+    assert.deepEqual(ev.system, [{ type: "text", text: "test note" }])
+  })
+
+  test("sandbox: allows file tools inside the workspace", async () => {
+    for (const [tool, input] of [
+      ["read", { path: "src/app.js" }],
+      ["write", { path: "out/gen.js", content: "x" }],
+      ["edit", { path: "./README.md" }],
+      ["patch", { path: path.join(dir, "abs.txt") }],
+      ["grep", { pattern: "x", path: dir }],
+      ["glob", { pattern: "**/*.js", path: dir }],
+      ["glob", { pattern: "**/*.js" }],
+    ]) {
+      await p.before(toolEvent(tool, input))
+    }
+  })
+
+  test("sandbox: refuses file tools outside the sandbox", async () => {
+    await assert.rejects(() => p.before(toolEvent("read", { path: "/etc/passwd" })), /outside the sandbox roots/)
+    await assert.rejects(() => p.before(toolEvent("write", { path: path.join(outside, "x.js"), content: "x" })), /outside the sandbox roots/)
+    await assert.rejects(() => p.before(toolEvent("edit", { path: "../../etc/hosts" })), /outside the sandbox roots/)
+    await assert.rejects(() => p.before(toolEvent("grep", { pattern: "x", path: outside })), /outside the sandbox roots/)
+    await assert.rejects(() => p.before(toolEvent("glob", { pattern: "**/*", path: outside })), /outside the sandbox roots/)
+  })
+
+  test("sandbox: refuses shell working directories outside the sandbox", async () => {
+    await assert.rejects(() => p.before(toolEvent("shell", { command: "ls", cwd: outside })), /outside the sandbox roots/)
+    await assert.rejects(() => p.before(toolEvent("shell", { command: "ls", cwd: "/etc" })), /outside the sandbox roots/)
+    await p.before(toolEvent("shell", { command: "ls", cwd: dir }))
+    await p.before(toolEvent("shell", { command: "ls", cwd: "src" }))
+    await p.before(toolEvent("shell", { command: "ls" }))
+  })
+
+  test("sandbox: extra roots option widens the sandbox", async () => {
+    const wide = await makeCtx(dir, { roots: [outside] }, sandbox)
+    await wide.before(toolEvent("read", { path: path.join(outside, "data.txt") }))
+  })
+
+  test("sandbox: disabled plugin is inert", async () => {
+    const off = await makeCtx(dir, { enabled: false }, sandbox)
+    await off.before(toolEvent("read", { path: "/etc/passwd" }))
+    const ev = { system: [], tools: {}, options: {} }
+    await off.context(ev)
+    assert.equal(ev.system.length, 0)
   })
 }
